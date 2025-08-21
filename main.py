@@ -14,6 +14,29 @@ QURAN_ANTI_DEWASA = {
     "arti": "Katakanlah kepada orang laki-laki yang beriman: Hendaklah mereka menahan pandangannya, dan memelihara kemaluannya; yang demikian itu lebih suci bagi mereka. Sesungguhnya Allah Maha Mengetahui apa yang mereka perbuat. (QS An-Nur:30)"
 }
 
+# Helper buat jalankan fungsi dengan bot terdaftar
+async def run_with_bot(bot_name, func, *args, **kwargs):
+    bot = get_bot(bot_name)
+    if not bot:
+        return None, f"❌ Bot {bot_name} tidak ditemukan di database."
+
+    token = bot["token"]
+    async with Client(
+        f"bot_{bot_name}",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        bot_token=token,
+        no_updates=True
+    ) as subbot:
+        try:
+            result = await func(subbot, *args, **kwargs)
+            return result, None
+        except Exception as e:
+            return None, f"❌ Error pada bot {bot_name}: {str(e)}"
+
+# =======================
+# START
+# =======================
 @app.on_message(filters.command("start"))
 async def start_cmd(client, message):
     buttons = [
@@ -27,40 +50,38 @@ async def start_cmd(client, message):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
+# =======================
+# CALLBACK
+# =======================
 @app.on_callback_query()
 async def callback_handler(client, cq):
     data = cq.data
 
-    # ✅ Tambah bot
     if data == "add_bot":
         if cq.from_user.id != OWNER_ID:
             return await cq.answer("Hanya Owner yang bisa menambahkan bot!", show_alert=True)
-        await cq.message.reply("Kirim dengan format:\n\n`/addbot namabot token`")
+        return await cq.message.reply("Kirim dengan format:\n\n`/addbot namabot token`")
 
-    # ✅ Hapus bot
     elif data == "hapus_bot":
         bots = list_bots()
         if not bots:
             return await cq.message.reply("Tidak ada bot terdaftar.")
         buttons = [[InlineKeyboardButton(bot['name'], callback_data=f"hapus_{bot['name']}")] for bot in bots]
-        await cq.message.reply("Pilih bot yang akan dihapus:", reply_markup=InlineKeyboardMarkup(buttons))
+        return await cq.message.reply("Pilih bot yang akan dihapus:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("hapus_"):
         name = data.split("_", 1)[1]
         if remove_bot(name):
-            await cq.message.reply(f"✅ Bot {name} berhasil dihapus.")
-        else:
-            await cq.message.reply("❌ Gagal menghapus bot.")
+            return await cq.message.reply(f"✅ Bot {name} berhasil dihapus.")
+        return await cq.message.reply("❌ Gagal menghapus bot.")
 
-    # ✅ Lihat daftar bot
     elif data == "lihat_daftar":
         bots = list_bots()
         if not bots:
             return await cq.message.reply("Tidak ada bot terdaftar.")
         buttons = [[InlineKeyboardButton(bot['name'], callback_data=f"lihat_{bot['name']}")] for bot in bots]
-        await cq.message.reply("Daftar bot:", reply_markup=InlineKeyboardMarkup(buttons))
+        return await cq.message.reply("Daftar bot:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # ✅ Pilih bot → tampilkan aksi
     elif data.startswith("lihat_"):
         name = data.split("_", 1)[1]
         buttons = [
@@ -69,91 +90,92 @@ async def callback_handler(client, cq):
             [InlineKeyboardButton("🛡️ CekAdmin", callback_data=f"cekadmin_{name}")],
             [InlineKeyboardButton("👥 GetStaff", callback_data=f"getstaff_{name}")]
         ]
-        await cq.message.reply(f"Bot {name} terdaftar.\nPilih aksi:", reply_markup=InlineKeyboardMarkup(buttons))
+        return await cq.message.reply(f"Bot {name} terdaftar.\nPilih aksi:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # ✅ Banall
     elif data.startswith("banall_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "banall", "bot": name}
-        await cq.message.reply("Masukkan ID Grup/Channel target (-100xxx):")
+        return await cq.message.reply("Masukkan ID Grup/Channel target (-100xxx):")
 
-    # ✅ Send
     elif data.startswith("send_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "send_wait_id", "bot": name}
-        await cq.message.reply("Masukkan ID Grup/Channel target untuk mengirim pesan:")
+        return await cq.message.reply("Masukkan ID Grup/Channel target untuk mengirim pesan:")
 
-    # ✅ CekAdmin
-    elif data.startswith("cekadmin_"):
-        name = data.split("_", 1)[1]
-        # ❗Catatan: perlu API userbot untuk benar-benar cek semua grup
-        await cq.message.reply(f"⚠️ Fitur CekAdmin global belum bisa dipakai penuh.\nBot {name} hanya bisa cek lewat perintah manual.")
-
-    # ✅ GetStaff
     elif data.startswith("getstaff_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "getstaff", "bot": name}
-        await cq.message.reply("Masukkan ID Grup/Channel target untuk mendapatkan daftar staff/admin:")
+        return await cq.message.reply("Masukkan ID Grup/Channel target untuk mendapatkan daftar staff/admin:")
 
 # =======================
-# Handle input lanjutan
+# STATE HANDLER
 # =======================
-@app.on_message(filters.text & ~filters.command(["start", "addbot", "banall"]))
+@app.on_message(filters.text & ~filters.command(["start", "addbot"]))
 async def handle_states(client, message):
     uid = message.from_user.id
     if uid not in user_states:
         return
-
     state = user_states[uid]
 
-    # ✅ Banall
+    # 🚫 Banall pakai bot terdaftar
     if state["action"] == "banall":
         target = message.text.strip()
-        await message.reply(f"🔄 Memulai banned all di {target}...")
+        name = state["bot"]
 
-        try:
-            async for member in client.get_chat_members(target):
+        async def do_banall(bot, chat_id):
+            async for member in bot.get_chat_members(chat_id):
                 try:
-                    await client.ban_chat_member(target, member.user.id)
+                    await bot.ban_chat_member(chat_id, member.user.id)
                 except:
                     pass
-            await message.reply("✅ Banned Telah Selesai")
-        except:
-            await message.reply("⚠️ Bot perlu interaksi ke grup.\nMengirim ayat Qur’an...")
-            await client.send_message(
-                target,
-                f"{QURAN_ANTI_DEWASA['arab']}\n\n_{QURAN_ANTI_DEWASA['arti']}_"
+
+        _, err = await run_with_bot(name, do_banall, target)
+        if err:
+            await message.reply(f"{err}\nMengirim ayat Qur’an...")
+            await run_with_bot(
+                name,
+                lambda b, c: b.send_message(c, f"{QURAN_ANTI_DEWASA['arab']}\n\n_{QURAN_ANTI_DEWASA['arti']}_"),
+                target
             )
+        else:
+            await message.reply("✅ Banned Telah Selesai")
         del user_states[uid]
 
-    # ✅ Send (minta isi pesan)
+    # 📤 Send pakai bot terdaftar
     elif state["action"] == "send_wait_id":
         user_states[uid]["target"] = message.text.strip()
         user_states[uid]["action"] = "send_wait_msg"
-        await message.reply("Silakan kirim isi pesan yang ingin dikirim:")
+        return await message.reply("Silakan kirim isi pesan yang ingin dikirim:")
 
     elif state["action"] == "send_wait_msg":
         target = state["target"]
-        try:
-            await client.send_message(target, message.text)
+        name = state["bot"]
+        _, err = await run_with_bot(name, lambda b, c, t: b.send_message(c, t), target, message.text)
+        if err:
+            await message.reply(err)
+        else:
             await message.reply("✅ Pesan berhasil dikirim.")
-        except:
-            await message.reply("❌ Gagal mengirim pesan, pastikan bot sudah join & admin.")
         del user_states[uid]
 
-    # ✅ GetStaff
+    # 👥 GetStaff pakai bot terdaftar
     elif state["action"] == "getstaff":
         target = message.text.strip()
-        try:
+        name = state["bot"]
+
+        async def do_getstaff(bot, chat_id):
             admins = []
-            async for m in client.get_chat_members(target, filter="administrators"):
+            async for m in bot.get_chat_members(chat_id, filter="administrators"):
                 admins.append(f"- {m.user.first_name} ({m.user.id})")
+            return admins
+
+        admins, err = await run_with_bot(name, do_getstaff, target)
+        if err:
+            await message.reply(err)
+        else:
             if admins:
                 await message.reply("👥 Daftar Admin:\n" + "\n".join(admins))
             else:
                 await message.reply("❌ Tidak ada admin ditemukan.")
-        except:
-            await message.reply("⚠️ Bot bukan admin atau tidak ada akses ke target.")
         del user_states[uid]
 
 # =======================
@@ -174,3 +196,4 @@ async def add_bot_cmd(client, message):
 
 if __name__ == "__main__":
     app.run()
+0
