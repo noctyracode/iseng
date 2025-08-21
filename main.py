@@ -1,5 +1,6 @@
 import asyncio
 import signal
+import sys
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
@@ -7,7 +8,7 @@ from db import add_bot, remove_bot, list_bots, get_bot
 
 app = Client("iseng", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Simpan state interaksi user
+# State user
 user_states = {}
 
 QURAN_ANTI_DEWASA = {
@@ -15,9 +16,9 @@ QURAN_ANTI_DEWASA = {
     "arti": "Katakanlah kepada orang laki-laki yang beriman: Hendaklah mereka menahan pandangannya, dan memelihara kemaluannya; yang demikian itu lebih suci bagi mereka. Sesungguhnya Allah Maha Mengetahui apa yang mereka perbuat. (QS An-Nur:30)"
 }
 
-# =======================
-# Helper untuk jalanin bot terdaftar
-# =======================
+# ==========================
+# Helper fungsi bot terdaftar
+# ==========================
 async def run_with_bot(bot_name, func, *args, **kwargs):
     bot = get_bot(bot_name)
     if not bot:
@@ -32,17 +33,21 @@ async def run_with_bot(bot_name, func, *args, **kwargs):
         no_updates=True
     ) as subbot:
         try:
+            # Pastikan peer dikenali dulu
+            if "target" in kwargs:
+                try:
+                    await subbot.get_chat(kwargs["target"])
+                except Exception as e:
+                    return None, f"❌ Gagal mengenali target: {str(e)}"
+
             result = await func(subbot, *args, **kwargs)
             return result, None
         except Exception as e:
-            # Handling khusus Peer_ID_Invalid
-            if "PEER_ID_INVALID" in str(e):
-                return None, "⚠️ Error: Bot belum kenal ID target. Pastikan bot sudah join & pernah ada aktivitas di grup itu."
             return None, f"❌ Error pada bot {bot_name}: {str(e)}"
 
-# =======================
-# START
-# =======================
+# ==========================
+# Commands
+# ==========================
 @app.on_message(filters.command("start"))
 async def start_cmd(client, message):
     buttons = [
@@ -56,25 +61,35 @@ async def start_cmd(client, message):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# =======================
-# CALLBACK HANDLER
-# =======================
+@app.on_message(filters.command("addbot"))
+async def add_bot_cmd(client, message):
+    if message.from_user.id != OWNER_ID:
+        return await message.reply("❌ Hanya Owner yang bisa menambahkan bot!")
+    try:
+        _, name, token = message.text.split(" ", 2)
+        if add_bot(name, token):
+            await message.reply(f"✅ Bot {name} berhasil ditambahkan.")
+        else:
+            await message.reply("❌ Bot sudah ada di database.")
+    except:
+        await message.reply("Format salah!\nGunakan: `/addbot namabot token`")
+
+# ==========================
+# Callback
+# ==========================
 @app.on_callback_query()
 async def callback_handler(client, cq):
     data = cq.data
 
-    # Tambah bot
     if data == "add_bot":
         if cq.from_user.id != OWNER_ID:
             return await cq.answer("Hanya Owner yang bisa menambahkan bot!", show_alert=True)
         return await cq.message.reply("Kirim dengan format:\n\n`/addbot namabot token`")
 
-    # Hapus bot
     elif data == "hapus_bot":
         bots = list_bots()
         if not bots:
             return await cq.message.reply("Tidak ada bot terdaftar.")
-        # ambil nama dari DB
         buttons = [[InlineKeyboardButton(bot['name'], callback_data=f"hapus_{bot['name']}")] for bot in bots]
         return await cq.message.reply("Pilih bot yang akan dihapus:", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -84,25 +99,29 @@ async def callback_handler(client, cq):
             return await cq.message.reply(f"✅ Bot {name} berhasil dihapus.")
         return await cq.message.reply("❌ Gagal menghapus bot.")
 
-    # Lihat daftar bot
     elif data == "lihat_daftar":
         bots = list_bots()
         if not bots:
             return await cq.message.reply("Tidak ada bot terdaftar.")
 
         buttons = []
-        for b in bots:
-            token = b["token"]
+        for bot in bots:
+            token = bot["token"]
             try:
-                async with Client(f"check_{b['name']}", api_id=API_ID, api_hash=API_HASH, bot_token=token, no_updates=True) as tempbot:
-                    me = await tempbot.get_me()
-                    buttons.append([InlineKeyboardButton(me.first_name, callback_data=f"lihat_{b['name']}")])
+                async with Client(
+                    f"tmp_{bot['name']}",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    bot_token=token,
+                    no_updates=True
+                ) as tmpbot:
+                    me = await tmpbot.get_me()
+                    buttons.append([InlineKeyboardButton(me.first_name, callback_data=f"lihat_{bot['name']}")])
             except:
-                buttons.append([InlineKeyboardButton(b['name'], callback_data=f"lihat_{b['name']}")])
+                buttons.append([InlineKeyboardButton(bot['name'], callback_data=f"lihat_{bot['name']}")])
 
-        return await cq.message.reply("Daftar bot terdaftar:", reply_markup=InlineKeyboardMarkup(buttons))
+        return await cq.message.reply("Daftar bot:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # Pilih bot → tampilkan aksi
     elif data.startswith("lihat_"):
         name = data.split("_", 1)[1]
         buttons = [
@@ -112,27 +131,24 @@ async def callback_handler(client, cq):
         ]
         return await cq.message.reply(f"Bot {name} terdaftar.\nPilih aksi:", reply_markup=InlineKeyboardMarkup(buttons))
 
-    # Banall
     elif data.startswith("banall_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "banall", "bot": name}
         return await cq.message.reply("Masukkan ID Grup/Channel target (-100xxx):")
 
-    # Send
     elif data.startswith("send_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "send_wait_id", "bot": name}
-        return await cq.message.reply("Masukkan ID Grup/Channel target untuk mengirim pesan:")
+        return await cq.message.reply("Masukkan ID Grup/Channel target:")
 
-    # GetStaff
     elif data.startswith("getstaff_"):
         name = data.split("_", 1)[1]
         user_states[cq.from_user.id] = {"action": "getstaff", "bot": name}
-        return await cq.message.reply("Masukkan ID Grup/Channel target untuk mendapatkan daftar staff/admin:")
+        return await cq.message.reply("Masukkan ID Grup/Channel target untuk daftar staff/admin:")
 
-# =======================
-# STATE HANDLER
-# =======================
+# ==========================
+# State handler
+# ==========================
 @app.on_message(filters.text & ~filters.command(["start", "addbot"]))
 async def handle_states(client, message):
     uid = message.from_user.id
@@ -140,7 +156,7 @@ async def handle_states(client, message):
         return
     state = user_states[uid]
 
-    # Banall
+    # 🚫 Banall
     if state["action"] == "banall":
         target = message.text.strip()
         name = state["bot"]
@@ -152,19 +168,20 @@ async def handle_states(client, message):
                 except:
                     pass
 
-        _, err = await run_with_bot(name, do_banall, target)
+        _, err = await run_with_bot(name, do_banall, target=target, chat_id=target)
         if err:
-            await message.reply(err)
+            await message.reply(f"{err}\nMengirim ayat Qur’an...")
             await run_with_bot(
                 name,
                 lambda b, c: b.send_message(c, f"{QURAN_ANTI_DEWASA['arab']}\n\n_{QURAN_ANTI_DEWASA['arti']}_"),
-                target
+                target=target,
+                c=target
             )
         else:
             await message.reply("✅ Banned Telah Selesai")
         del user_states[uid]
 
-    # Send
+    # 📤 Send
     elif state["action"] == "send_wait_id":
         user_states[uid]["target"] = message.text.strip()
         user_states[uid]["action"] = "send_wait_msg"
@@ -173,15 +190,20 @@ async def handle_states(client, message):
     elif state["action"] == "send_wait_msg":
         target = state["target"]
         name = state["bot"]
-
-        _, err = await run_with_bot(name, lambda b, c, t: b.send_message(c, t), target, message.text)
+        _, err = await run_with_bot(
+            name,
+            lambda b, c, t: b.send_message(c, t),
+            target=target,
+            c=target,
+            t=message.text
+        )
         if err:
             await message.reply(err)
         else:
             await message.reply("✅ Pesan berhasil dikirim.")
         del user_states[uid]
 
-    # GetStaff
+    # 👥 GetStaff
     elif state["action"] == "getstaff":
         target = message.text.strip()
         name = state["bot"]
@@ -192,7 +214,7 @@ async def handle_states(client, message):
                 admins.append(f"- {m.user.first_name} ({m.user.id})")
             return admins
 
-        admins, err = await run_with_bot(name, do_getstaff, target)
+        admins, err = await run_with_bot(name, do_getstaff, target=target, chat_id=target)
         if err:
             await message.reply(err)
         else:
@@ -202,42 +224,22 @@ async def handle_states(client, message):
                 await message.reply("❌ Tidak ada admin ditemukan.")
         del user_states[uid]
 
-# =======================
-# Add Bot CMD
-# =======================
-@app.on_message(filters.command("addbot"))
-async def add_bot_cmd(client, message):
-    if message.from_user.id != OWNER_ID:
-        return await message.reply("❌ Hanya Owner yang bisa menambahkan bot!")
-    try:
-        _, name, token = message.text.split(" ", 2)
-        if add_bot(name, token):
-            await message.reply(f"✅ Bot {name} berhasil ditambahkan.\nJika diklik start, bot akan menampilkan ayat Qur’an anti-dewasa.")
-        else:
-            await message.reply("❌ Bot sudah ada di database.")
-    except:
-        await message.reply("Format salah!\nGunakan: `/addbot namabot token`")
-
-# =======================
-# Pesan saat start/stop
-# =======================
-def on_start():
-    async def _inner():
-        async with app:
-            me = await app.get_me()
-            print(f"✅ Bot {me.first_name} (@{me.username}) berhasil dijalankan!")
-    asyncio.get_event_loop().run_until_complete(_inner())
-
-def on_stop(*args):
-    async def _inner():
-        async with app:
-            me = await app.get_me()
-            print(f"🛑 Bot {me.first_name} (@{me.username}) dihentikan!")
-    asyncio.get_event_loop().run_until_complete(_inner())
-    exit(0)
+# ==========================
+# Run with logging
+# ==========================
+def handle_exit(botname):
+    print(f"\n⚠️ Bot {botname} diberhentikan.")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, on_stop)
-    signal.signal(signal.SIGTERM, on_stop)
-    on_start()
-    app.run()
+    async def startup():
+        async with app:
+            me = await app.get_me()
+            print(f"✅ Bot {me.first_name} (@{me.username}) telah dijalankan.")
+        app.run()
+
+    # Tangani CTRL+C
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda s=sig: handle_exit("iseng"))
+    startup()
