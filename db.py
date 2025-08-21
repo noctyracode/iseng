@@ -1,23 +1,51 @@
-bots = []
+# db.py
+import os
+from motor.motor_asyncio import AsyncIOMotorClient
+from dotenv import load_dotenv
 
-def add_bot(token, name):
-    bots.append({"token": token, "name": name})
+load_dotenv()
 
-def remove_bot(token):
-    global bots
-    bots = [b for b in bots if b["token"] != token]
+MONGO_URL = os.getenv("MONGO_DB")
+DB_NAME = os.getenv("DB_NAME")
 
-def get_bots():
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+# ---- Bot Management ----
+async def add_bot(token: str, username: str):
+    """Tambahkan bot baru ke database"""
+    existing = await db.bots.find_one({"token": token})
+    if not existing:
+        await db.bots.insert_one({"token": token, "username": username})
+        return True
+    return False
+
+async def remove_bot(token: str):
+    """Hapus bot berdasarkan token"""
+    result = await db.bots.delete_one({"token": token})
+    return result.deleted_count > 0
+
+async def get_bots():
+    """Ambil semua bot yang terdaftar"""
+    bots = []
+    async for bot in db.bots.find({}):
+        bots.append(bot)
     return bots
 
-states = {}
+# ---- State Management (untuk tombol interaktif) ----
+async def save_state(user_id: int, state: dict):
+    """Simpan state interaksi user"""
+    await db.states.update_one(
+        {"user_id": user_id},
+        {"$set": {"state": state}},
+        upsert=True
+    )
 
-def save_state(user_id, state):
-    states[user_id] = state
+async def get_state(user_id: int):
+    """Ambil state user"""
+    state = await db.states.find_one({"user_id": user_id})
+    return state["state"] if state else None
 
-def get_state(user_id):
-    return states.get(user_id)
-
-def clear_state(user_id):
-    if user_id in states:
-        del states[user_id]
+async def clear_state(user_id: int):
+    """Hapus state user"""
+    await db.states.delete_one({"user_id": user_id})
