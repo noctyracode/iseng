@@ -1,22 +1,23 @@
-from pymongo import MongoClient
-from config import MONGO_DB, DB_NAME
+bots = []
 
-client = MongoClient(MONGO_DB)
-db = client[DB_NAME]
+def add_bot(token, name):
+    bots.append({"token": token, "name": name})
 
-bots_collection = db["bots"]
+def remove_bot(token):
+    global bots
+    bots = [b for b in bots if b["token"] != token]
 
-def add_bot(name, token):
-    if bots_collection.find_one({"name": name}):
-        return False
-    bots_collection.insert_one({"name": name, "token": token})
-    return True
+def get_bots():
+    return bots
 
-def remove_bot(name):
-    return bots_collection.delete_one({"name": name}).deleted_count > 0
+states = {}
 
-def list_bots():
-    return list(bots_collection.find({}, {"_id": 0}))
+def save_state(user_id, state):
+    states[user_id] = state
 
-def get_bot(name):
-    return bots_collection.find_one({"name": name}, {"_id": 0})
+def get_state(user_id):
+    return states.get(user_id)
+
+def clear_state(user_id):
+    if user_id in states:
+        del states[user_id]
