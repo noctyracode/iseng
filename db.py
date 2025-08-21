@@ -1,38 +1,46 @@
-from pymongo import MongoClient
 import os
+import motor.motor_asyncio
+from dotenv import load_dotenv
 
-MONGO_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
-DB_NAME = "iseng"
+# Load .env
+load_dotenv()
 
-client = MongoClient(MONGO_URL)
-db = client[DB_NAME]
-bots_collection = db["bots"]
-state_collection = db["states"]
+# Ambil URI MongoDB dari .env
+MONGO_URI = os.getenv("MONGO_URI")
 
+if not MONGO_URI:
+    raise ValueError("❌ MONGO_URI tidak ditemukan di .env")
 
-def add_bot(token: str):
-    if not bots_collection.find_one({"token": token}):
-        bots_collection.insert_one({"token": token})
+# Inisialisasi client MongoDB
+client = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
+db = client["iseng_db"]
 
+# Collection untuk bot
+bots_col = db["bots"]
+state_col = db["state"]
 
-def remove_bot(token: str):
-    bots_collection.delete_one({"token": token})
+# Tambah bot
+async def add_bot(token: str):
+    await bots_col.update_one({"token": token}, {"$set": {"token": token}}, upsert=True)
 
+# Hapus bot
+async def remove_bot(token: str):
+    await bots_col.delete_one({"token": token})
 
-def get_bots():
-    return list(bots_collection.find())
+# Ambil semua bot
+async def get_bots():
+    cursor = bots_col.find({})
+    return [doc["token"] async for doc in cursor]
 
+# Simpan state
+async def save_state(key: str, value: dict):
+    await state_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
 
-def save_state(user_id: int, state: dict):
-    state_collection.update_one(
-        {"user_id": user_id}, {"$set": {"state": state}}, upsert=True
-    )
+# Ambil state
+async def get_state(key: str):
+    doc = await state_col.find_one({"key": key})
+    return doc["value"] if doc else None
 
-
-def get_state(user_id: int):
-    data = state_collection.find_one({"user_id": user_id})
-    return data["state"] if data else None
-
-
-def clear_state(user_id: int):
-    state_collection.delete_one({"user_id": user_id})
+# Hapus state
+async def clear_state(key: str):
+    await state_col.delete_one({"key": key})
